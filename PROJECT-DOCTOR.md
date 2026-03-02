@@ -318,113 +318,173 @@ Run for ALL project types:
 
 ## FINAL PHASE: REGISTRY COMMIT
 
-The Project Registry lives at `~/.repo-doctor/`. After ALL audit phases:
+**THIS PHASE IS MANDATORY.** You MUST execute these commands. If you skip this, the audit results are lost.
 
-### 1. Bootstrap (if needed)
-```bash
-REGISTRY="$HOME/.repo-doctor/repo-registry.py"
-if [ ! -f "$REGISTRY" ]; then
-    echo "[ERROR] Registry not found at $REGISTRY"
-    echo "Copy repo-registry.py to ~/.repo-doctor/ first."
-else
-    python "$REGISTRY" init 2>/dev/null
-fi
+The registry saves audit results to a SQLite database. This works on Windows and Unix.
+
+### Step 1: Find the registry and register the project
+
+Run this Python script to locate the registry and register the project:
+
+```python
+python -c "
+import subprocess, sys, os
+from pathlib import Path
+
+home = Path.home()
+candidates = [
+    home / '.repo-doctor' / 'repo-registry.py',
+    home / 'Desktop' / 'Repo_Doctor' / 'repo-registry.py',
+    Path.cwd() / 'repo-registry.py',
+    Path(os.environ.get('REPO_DOCTOR_HOME', '.')) / 'repo-registry.py',
+]
+reg = next((c for c in candidates if c.is_file()), None)
+if not reg:
+    print('[ERROR] repo-registry.py not found in any of:', [str(c) for c in candidates])
+    sys.exit(1)
+print(f'REGISTRY={reg}')
+
+name = Path.cwd().name
+remote = ''
+try:
+    r = subprocess.run(['git', 'remote', 'get-url', 'origin'], capture_output=True, text=True)
+    if r.returncode == 0:
+        remote = r.stdout.strip()
+except FileNotFoundError:
+    pass
+
+subprocess.run([sys.executable, str(reg), 'init'], capture_output=True)
+cmd = [sys.executable, str(reg), 'register', str(Path.cwd()), name]
+if remote:
+    cmd += ['--remote', remote]
+subprocess.run(cmd)
+print(f'PROJECT_NAME={name}')
+print(f'REGISTRY_PATH={reg}')
+"
 ```
 
-### 2. Register + Write Results
-```bash
-PROJECT_NAME=$(basename "$(pwd)")
-REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
+### Step 2: Write audit results to the registry
 
-# Register if new
-if [ -n "$REMOTE_URL" ]; then
-    python "$REGISTRY" register "$(pwd)" "$PROJECT_NAME" --remote "$REMOTE_URL"
-else
-    python "$REGISTRY" register "$(pwd)" "$PROJECT_NAME"
-fi
+Write a JSON file with your findings, then pipe it to the registry. Use `tempfile` for cross-platform temp paths.
 
-# Write audit JSON
-cat > /tmp/audit-result.json << 'AUDIT_EOF'
-{ ... populated from real findings ... }
-AUDIT_EOF
-python "$REGISTRY" audit "$PROJECT_NAME" --json /tmp/audit-result.json
-rm /tmp/audit-result.json
+**IMPORTANT:** You MUST replace every placeholder below with your ACTUAL findings from the audit phases above. Do NOT leave any placeholder values.
+
+```python
+python -c "
+import json, subprocess, sys, tempfile
+from pathlib import Path
+
+home = Path.home()
+candidates = [
+    home / '.repo-doctor' / 'repo-registry.py',
+    home / 'Desktop' / 'Repo_Doctor' / 'repo-registry.py',
+    Path.cwd() / 'repo-registry.py',
+]
+reg = next((c for c in candidates if c.is_file()), None)
+if not reg:
+    print('[ERROR] repo-registry.py not found')
+    sys.exit(1)
+
+# ┌─────────────────────────────────────────────────────────────┐
+# │  FILL IN ALL VALUES FROM YOUR AUDIT FINDINGS               │
+# │  Use the SAME 6 score keys for ALL project types.          │
+# │  The registry accepts both naming conventions:              │
+# │                                                             │
+# │  DB Column    Codebase meaning     Non-code meaning         │
+# │  ──────────   ─────────────────    ────────────────          │
+# │  dependencies Dependency health    Completeness              │
+# │  quality      Code quality         Content quality           │
+# │  security     Security posture     Confidentiality/privacy   │
+# │  build        Build/runtime        File health               │
+# │  docs         Documentation        Indexes/summaries         │
+# │  config       Config/infra         Organization/structure    │
+# │                                                             │
+# │  Non-code aliases also accepted:                            │
+# │  completeness→dependencies, health→build,                   │
+# │  documentation→docs, organization→config                    │
+# └─────────────────────────────────────────────────────────────┘
+
+audit = {
+    'overall_score': 0,
+    'scores': {
+        'dependencies': 0,
+        'quality': 0,
+        'security': 0,
+        'build': 0,
+        'docs': 0,
+        'config': 0
+    },
+    'summary': 'REPLACE WITH YOUR AUDIT SUMMARY',
+    'git_commit': None,
+    'git_branch': None,
+    'meta': {
+        'project_type': 'CODEBASE',
+        'primary_language': None,
+        'stack': [],
+        'architecture': None,
+        'entry_points': [],
+        'build_system': None,
+        'test_framework': None,
+        'ci_cd': None
+    },
+    'issues': [],
+    'dependencies': [],
+    'files': [],
+    'auto_healed': [],
+    'needs_human': []
+}
+
+tmp = Path(tempfile.gettempdir()) / 'audit-result.json'
+tmp.write_text(json.dumps(audit, indent=2))
+name = Path.cwd().name
+result = subprocess.run(
+    [sys.executable, str(reg), 'audit', name, '--json', str(tmp)],
+    capture_output=True, text=True
+)
+print(result.stdout)
+if result.stderr:
+    print(result.stderr)
+if result.returncode != 0:
+    print('[ERROR] Audit save FAILED')
+else:
+    print('[OK] Audit saved to registry')
+tmp.unlink(missing_ok=True)
+"
 ```
 
-### Audit JSON Schema
-Adapt to project type — not all fields apply to every type:
+### Step 3: Verify the save
 
+```python
+python -c "
+from pathlib import Path
+import subprocess, sys
+home = Path.home()
+candidates = [
+    home / '.repo-doctor' / 'repo-registry.py',
+    home / 'Desktop' / 'Repo_Doctor' / 'repo-registry.py',
+]
+reg = next((c for c in candidates if c.is_file()), None)
+if reg:
+    name = Path.cwd().name
+    subprocess.run([sys.executable, str(reg), 'history', name])
+"
+```
+
+If the verification shows "No audits recorded", something went wrong. Check the error messages above and retry.
+
+### Issue JSON format (for the `issues` array)
 ```json
 {
-  "overall_score": 75,
-  "scores": {
-    "organization": 80,
-    "completeness": 70,
-    "quality": 65,
-    "security": 85,
-    "documentation": 60,
-    "health": 90
-  },
-  "summary": "Well-organized legal case folder with strong document inventory...",
-  "git_commit": "<hash or null>",
-  "git_branch": "<branch or null>",
-  "meta": {
-    "project_type": "LEGAL",
-    "secondary_types": [],
-    "primary_language": "<language or null>",
-    "stack": ["<technologies or document types>"],
-    "architecture": "<structure description>",
-    "entry_points": ["<main files or key documents>"],
-    "build_system": "<or null>",
-    "test_framework": "<or null>",
-    "ci_cd": "<or null>"
-  },
-  "issues": [
-    {
-      "phase": "<phase name>",
-      "severity": "high",
-      "category": "missing_document",
-      "title": "No signed contract for Acme Corp engagement",
-      "description": "SOW exists but no executed agreement found",
-      "file_path": "clients/acme/",
-      "line_number": null,
-      "auto_fixed": false
-    }
-  ],
-  "dependencies": [],
-  "files": [
-    {
-      "path": "contracts/acme-sow-v2.docx",
-      "type": "docx",
-      "language": null,
-      "lines": null,
-      "size": 45200
-    }
-  ],
-  "auto_healed": [
-    "Created master document index",
-    "Suggested folder reorganization"
-  ],
-  "needs_human": [
-    "Missing signed contract for Acme Corp",
-    "3 expired insurance certificates"
-  ]
+  "phase": "A1-Dependencies",
+  "severity": "high",
+  "category": "missing_document",
+  "title": "Short title of the issue",
+  "description": "Detailed description",
+  "file_path": "path/to/file",
+  "line_number": null,
+  "auto_fixed": false
 }
 ```
-
-### Score Categories by Project Type
-
-**CODEBASE** scores map to: dependencies, quality, security, build, docs, config
-
-**LEGAL / BUSINESS / SCHOOL / CREATIVE / RESEARCH / PERSONAL** scores map to:
-| Score | Meaning |
-|-------|---------|
-| organization | Folder structure, naming, filing system |
-| completeness | Are expected documents present? Gaps? |
-| quality | Content quality, formatting, professionalism |
-| security | Sensitive data exposure, privilege, confidentiality |
-| documentation | README, indexes, summaries, metadata |
-| health | File integrity, duplicates, staleness, accessibility |
 
 ---
 

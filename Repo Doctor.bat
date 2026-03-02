@@ -197,20 +197,35 @@ echo  ======================================================
 echo   Launching Claude Code audit on: %rname%
 echo  ======================================================
 echo.
-echo  Claude Code will open and run the full 7-phase audit.
+echo  Claude Code will run the full audit in this window.
 echo  Results will be saved to the registry automatically.
 echo.
 set /p "confirm=  Launch now? (y/n): "
 if /i not "%confirm%"=="y" goto MENU
 
 pushd "%rpath%"
-start "Repo Doctor Audit" cmd /k "claude -p PROJECT-DOCTOR.md"
+claude -p PROJECT-DOCTOR.md
+set "audit_exit=%errorlevel%"
 popd
 
 echo.
-echo  [OK] Claude Code launched in a new window.
-echo  When it finishes, results will be in your registry.
-echo  Run Dashboard or Status to see them.
+if !audit_exit! neq 0 (
+    echo  [WARNING] Claude Code exited with errors.
+)
+
+:: Verify audit was saved
+echo.
+echo  Verifying registry...
+python "%REGISTRY%" history "%rname%" 2>nul | findstr /c:"Score:" >nul 2>&1
+if errorlevel 1 (
+    echo  [WARNING] No audit found in registry for %rname%.
+    echo  The audit may not have saved its results.
+    echo  You can re-run or manually import results.
+) else (
+    echo  [OK] Audit saved to registry.
+)
+echo.
+python "%REGISTRY%" status "%rname%"
 echo.
 pause
 goto MENU

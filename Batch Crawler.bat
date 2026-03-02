@@ -79,8 +79,15 @@ if errorlevel 1 (
     set /a failed+=1
 )
 popd
+:: Verify audit was saved to registry
+python "%REGISTRY%" history "%_aname%" 2>nul | findstr /c:"Score:" >nul 2>&1
+if errorlevel 1 (
+    echo  [WARNING] No audit saved for %_aname% - results may be lost
+    set /a failed+=1
+) else (
+    echo  [OK] %_aname% complete - audit saved
+)
 set /a done+=1
-echo  [OK] %_aname% complete
 goto :eof
 
 :: -------------------------------------------------------

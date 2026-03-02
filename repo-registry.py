@@ -327,6 +327,15 @@ def cmd_register(path, name, remote_url=None, description=None):
             print(f"[UPDATE] Updated existing repo: {name} -> {path}")
 
 
+def _score(scores, *keys):
+    """Return the first non-None score from a list of field name aliases."""
+    for k in keys:
+        v = scores.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 def cmd_audit(name, json_file=None, json_data=None):
     """Log an audit result for a repo."""
     with db_session(SCHEMA) as conn:
@@ -336,15 +345,32 @@ def cmd_audit(name, json_file=None, json_data=None):
 
         repo_id = repo["id"]
 
-        # Load audit data
+        # Load audit data — from file, raw string/dict, or stdin
         if json_file:
             with open(json_file) as f:
                 data = json.load(f)
         elif json_data:
             data = json.loads(json_data) if isinstance(json_data, str) else json_data
+        elif not sys.stdin.isatty():
+            raw = sys.stdin.read().strip()
+            if not raw:
+                print("[ERROR] No JSON data on stdin")
+                return
+            # Extract JSON from Claude output — find first { ... last }
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start == -1 or end == -1:
+                print("[ERROR] No JSON object found in stdin")
+                return
+            data = json.loads(raw[start:end + 1])
         else:
-            print("[ERROR] Provide --json <file> or pipe JSON data")
+            print("[ERROR] Provide --json <file> or pipe JSON via stdin")
             return
+
+        # Score field aliasing — accept both codebase and non-codebase field names
+        # Codebase:    dependencies, quality, security, build, docs, config
+        # Non-code:    completeness, quality, security, health, documentation, organization
+        scores = data.get("scores", {})
 
         # Insert audit record
         audit_id = conn.execute(
@@ -356,12 +382,12 @@ def cmd_audit(name, json_file=None, json_data=None):
             (
                 repo_id, now_iso(),
                 data.get("overall_score"),
-                data.get("scores", {}).get("dependencies"),
-                data.get("scores", {}).get("quality"),
-                data.get("scores", {}).get("security"),
-                data.get("scores", {}).get("build"),
-                data.get("scores", {}).get("docs"),
-                data.get("scores", {}).get("config"),
+                _score(scores, "dependencies", "completeness", "dep"),
+                _score(scores, "quality"),
+                _score(scores, "security"),
+                _score(scores, "build", "health"),
+                _score(scores, "docs", "documentation"),
+                _score(scores, "config", "organization"),
                 data.get("summary"),
                 json_dumps(data),
                 json_dumps(data.get("auto_healed", [])),
@@ -1485,6 +1511,7 @@ def main():
     elif cmd == "audit":
         if len(sys.argv) < 3:
             print("Usage: repo-registry.py audit <name> --json <file>")
+            print("       echo '{...}' | repo-registry.py audit <name>")
             return
         name = sys.argv[2]
         json_file = sys.argv[sys.argv.index("--json") + 1] if "--json" in sys.argv else None
